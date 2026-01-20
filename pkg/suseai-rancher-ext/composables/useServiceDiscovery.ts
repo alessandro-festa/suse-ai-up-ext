@@ -93,20 +93,20 @@ export function useServiceDiscovery() {
         const allPods = response?.data?.items || response?.data || response?.items || [];
         console.log(`📊 [ServiceDiscovery] Extracted ${allPods.length} pods from response`);
 
-        // Filter for SUSE AI UP pods (container named 'suse-ai-up' with port 8911)
+        // Filter for SUSE AI UP pods (any container with port 8911 exposed)
         const suseAIPods = allPods.filter((pod: any) => {
           const podName = pod.metadata?.name || '';
           const podNamespace = pod.metadata?.namespace || '';
-          const hasCorrectContainer = pod.spec?.containers?.some((container: any) =>
-            container.name === 'suse-ai-up' && container.ports?.some((port: any) => port.containerPort === 8911)
+          const hasPort8911 = pod.spec?.containers?.some((container: any) =>
+            container.ports?.some((port: any) => port.containerPort === 8911)
           );
 
           // Check namespace filtering if specified
           const isNamespaceAllowed = allowedNamespaces ? allowedNamespaces.includes(podNamespace) : true;
 
-          console.log(`🔍 [ServiceDiscovery] Checking pod ${podName} in ${podNamespace}: container=${hasCorrectContainer}, namespaceAllowed=${isNamespaceAllowed}`);
+          console.log(`🔍 [ServiceDiscovery] Checking pod ${podName} in ${podNamespace}: hasPort8911=${hasPort8911}, namespaceAllowed=${isNamespaceAllowed}`);
 
-          return hasCorrectContainer && isNamespaceAllowed;
+          return hasPort8911 && isNamespaceAllowed;
         });
 
         console.log(`🎯 [ServiceDiscovery] Found ${suseAIPods.length} SUSE AI UP pods out of ${allPods.length} total pods`);
