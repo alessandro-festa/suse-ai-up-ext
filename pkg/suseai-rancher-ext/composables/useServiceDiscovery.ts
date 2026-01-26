@@ -43,6 +43,7 @@ export interface DetectedPod extends KubernetesPod {
   primaryIP?: string;
   clusterIP?: string;
   externalIPs?: string[];
+  url?: string;
 }
 
 /**
@@ -295,32 +296,27 @@ export function useServiceDiscovery() {
 
   /**
      * Construct accessible URL from pod and cluster data
+     * Uses Rancher Proxy URL to access the pod through the Rancher API
      */
-    const constructPodUrl = (pod: KubernetesPod, clusterInfo: any): string | undefined => {
-      // First, check if service URLs are configured
+    const constructPodUrl = (pod: KubernetesPod, clusterInfo: any, clusterId: string): string | undefined => {
+      // First, check if service URLs are configured manually
       const configuredUrls = store.state.suseai?.settings?.serviceUrls;
       if (configuredUrls && configuredUrls.length > 0) {
         return configuredUrls[0]; // Use the first configured service URL
       }
 
-      // First, try to use the cluster's load balancer public IP
-      const clusterPublicIP = getClusterPublicIP(clusterInfo);
-      if (clusterPublicIP) {
-        return `http://${clusterPublicIP}:8911`;
+      // Construct Rancher Proxy URL for the pod
+      // Format: /k8s/clusters/<clusterId>/api/v1/namespaces/<namespace>/pods/<podName>:<port>/proxy
+      if (clusterId && pod.metadata?.name && pod.metadata?.namespace) {
+        const podName = pod.metadata.name;
+        const namespace = pod.metadata.namespace;
+        const proxyUrl = `/k8s/clusters/${clusterId}/api/v1/namespaces/${namespace}/pods/${podName}:8911/proxy`;
+        
+        console.log(`🔗 [ServiceDiscovery] Constructed Rancher Proxy URL: ${proxyUrl}`);
+        return proxyUrl;
       }
 
-      // Fallback: Use pod IP if available
-      if (pod.status.podIP) {
-        return `http://${pod.status.podIP}:8911`;
-      }
-
-      // Use host IP as fallback
-      if (pod.status.hostIP) {
-        return `http://${pod.status.hostIP}:8911`;
-      }
-
-      // Default fallback
-      return 'http://localhost:8911';
+      return undefined;
     };
 
   /**
@@ -333,7 +329,7 @@ export function useServiceDiscovery() {
      try {
        logger.info(`Starting service discovery for cluster: ${clusterId}`);
 
-       // Validate cluster ID
+       // Validate clusterId
        if (!clusterId) {
          throw new Error('No cluster ID provided for service discovery');
        }
@@ -373,12 +369,15 @@ export function useServiceDiscovery() {
              const podNamespace = pod.metadata?.namespace || 'unknown';
              console.log(`🔍 [ServiceDiscovery] Processing pod: ${podName} in ${podNamespace}`)
 
-             const url = constructPodUrl(pod, clusterInfo);
+             const url = constructPodUrl(pod, clusterInfo, clusterId);
              console.log(`✅ [ServiceDiscovery] Constructed URL for ${podName}: ${url || 'none'}`)
 
              // Check pod health if we have a URL
              let isHealthy = false;
              if (url) {
+               // For Rancher Proxy URLs, we use the store.dispatch request method to handle auth
+               // But here checkServiceHealth uses fetch. 
+               // NOTE: Fetching relative URLs /k8s/... works if the browser session is authenticated with Rancher
                isHealthy = await checkServiceHealth(url);
                console.log(`🏥 [ServiceDiscovery] Health check for ${podName}: ${isHealthy ? 'PASS' : 'FAIL'}`);
              }
@@ -462,17 +461,53 @@ export function useServiceDiscovery() {
           // Determine primary IP (prefer public IP from annotations, fallback to service IPs)
           primaryIP = primaryIP || loadBalancerIP || clusterIP || externalIPs[0];
           
-          // Perform health check if we have an IP
+          // Construct Rancher Service Proxy URL
+          // Format: /k8s/clusters/<clusterId>/api/v1/namespaces/<namespace>/services/http:<serviceName>:<port>/proxy
+          // We use 'http:' prefix for the service name to specify the port name, or just the service name if port is numeric
+          // Standard Rancher proxy format often requires scheme:service:port
+          const serviceName = service.metadata?.name;
+          const serviceNamespace = service.metadata?.namespace;
+          const serviceProxyUrl = `/k8s/clusters/${clusterId}/api/v1/namespaces/${serviceNamespace}/services/http:${serviceName}:8911/proxy`;
+          console.log(`🔗 [ServiceDiscovery] Constructed Service Proxy URL: ${serviceProxyUrl}`);
+
+          // Perform health check
+          // Prioritize Service Proxy URL, then direct IP
           let isHealthy = false;
-          if (primaryIP) {
+          let finalUrl = '';
+
+          // 1. Try Service Proxy URL
+          if (serviceProxyUrl) {
+            try {
+              const healthResponse = await fetch(`${serviceProxyUrl}/health`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+              });
+              if (healthResponse.ok) {
+                isHealthy = true;
+                finalUrl = serviceProxyUrl;
+                console.log(`✅ [ServiceDiscovery] Service Proxy URL is healthy: ${serviceProxyUrl}`);
+              }
+            } catch (error) {
+              console.warn(`⚠️ [ServiceDiscovery] Service Proxy URL check failed:`, error);
+            }
+          }
+
+          // 2. If Proxy failed, try direct IP (fallback)
+          if (!isHealthy && primaryIP) {
             try {
               const healthResponse = await fetch(`http://${primaryIP}:8911/health`, {
                 method: 'GET',
                 mode: 'cors',
                 headers: { 'Content-Type': 'application/json' }
               });
-              isHealthy = healthResponse.ok;
-              console.log(`🏥 [ServiceDiscovery] Service health check for ${primaryIP}: ${isHealthy ? 'PASS' : 'FAIL'}`);
+              if (healthResponse.ok) {
+                isHealthy = true;
+                // If direct IP works, we don't necessarily have a URL structure for it unless we assume http://IP:8911
+                // But we prefer to keep finalUrl empty here so the UI constructs it from IP if needed, 
+                // OR we can just set it. Let's set it for consistency.
+                finalUrl = `http://${primaryIP}:8911`;
+                console.log(`🏥 [ServiceDiscovery] Direct IP health check for ${primaryIP}: PASS`);
+              }
             } catch (error) {
               console.warn(`⚠️ [ServiceDiscovery] Service health check failed for ${primaryIP}:`, error);
             }
@@ -497,11 +532,12 @@ export function useServiceDiscovery() {
               },
               primaryIP,
               clusterIP,
-              externalIPs: externalIPs.length > 0 ? externalIPs : (primaryIP ? [primaryIP] : undefined)
+              externalIPs: externalIPs.length > 0 ? externalIPs : (primaryIP ? [primaryIP] : undefined),
+              url: finalUrl || undefined
             };
             
             detectedPods.push(syntheticPod);
-            console.log(`✅ [ServiceDiscovery] Successfully created pod object from service`);
+            console.log(`✅ [ServiceDiscovery] Successfully created pod object from service with URL: ${finalUrl}`);
           }
         }
       } catch (serviceError: any) {
@@ -558,6 +594,10 @@ export function useServiceDiscovery() {
               console.log(`📍 [ServiceDiscovery] Using pod IP as primary IP: ${primaryIP}`);
             }
 
+            // Construct Rancher Proxy URL
+            const url = constructPodUrl(pod, {}, clusterId);
+            console.log(`🔗 [ServiceDiscovery] Constructed Proxy URL for pod object: ${url}`);
+
             clusterIP = pod.status?.podIP;
             if (pod.status?.hostIP) {
               externalIPs = [pod.status.hostIP];
@@ -567,11 +607,12 @@ export function useServiceDiscovery() {
               ...pod,
               primaryIP,
               clusterIP,
-              externalIPs
+              externalIPs,
+              url
             };
 
             detectedPods.push(detectedPod);
-            console.log(`✅ [ServiceDiscovery] Added pod ${podName} with primaryIP: ${primaryIP}`);
+            console.log(`✅ [ServiceDiscovery] Added pod ${podName} with primaryIP: ${primaryIP} and URL: ${url}`);
 
           } catch (podError) {
             console.error(`❌ [ServiceDiscovery] Error processing pod ${pod.metadata?.name}:`, podError);
@@ -631,14 +672,10 @@ export function useServiceDiscovery() {
         if (isHealthy) {
           return { healthy: true, url: lbUrl };
         }
-        console.log(`⚠️ [ServiceDiscovery] Loadbalancer IP ${loadbalancerIP} failed, trying localhost`);
+        console.log(`⚠️ [ServiceDiscovery] Loadbalancer IP ${loadbalancerIP} failed`);
       }
 
-      // Fallback to localhost
-      const localhostUrl = 'http://localhost:8911';
-      console.log(`🔍 [ServiceDiscovery] Trying localhost: ${localhostUrl}`);
-      const isHealthy = await checkServiceHealth(localhostUrl);
-      return { healthy: isHealthy, url: localhostUrl };
+      return { healthy: false, url: '' };
     };
 
   /**

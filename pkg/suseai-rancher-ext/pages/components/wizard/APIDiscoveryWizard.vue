@@ -1138,40 +1138,61 @@ const retryScan = async () => {
        // Fresh wizard, load clusters
        // Load clusters from Rancher
        console.log('Loading clusters from Rancher...');
+       let rawClusters: any[] = [];
+
         try {
           const response = await store.dispatch('rancher/request', {
             url: '/v3/clusters',
             method: 'GET'
           });
           const clusters = response.data || [];
-          accessibleClusters.value = clusters.map((cluster: any) => {
-            // Note: IP information will be extracted from service annotations during discovery
-            // Cluster IPs are not pre-filled as they come from the SUSE AI UP service endpoints
-            return {
-              id: cluster.id,
-              name: cluster.nameDisplay || cluster.name || cluster.id,
-              state: cluster.state || 'unknown',
-              transitioning: cluster.transitioning || false,
-              provider: cluster.provider || 'unknown',
-              ready: cluster.ready || false,
-              internalIP: '', // Will be filled from service discovery
-              publicIP: '' // Will be filled from service discovery
-            };
-          });
+          rawClusters = clusters.map((cluster: any) => ({
+            id: cluster.id,
+            name: cluster.nameDisplay || cluster.name || cluster.id,
+            state: cluster.state || 'unknown',
+            transitioning: cluster.transitioning || false,
+            provider: cluster.provider || 'unknown',
+            ready: cluster.ready || false,
+            internalIP: '',
+            publicIP: ''
+          }));
         } catch (error) {
           console.error('Failed to load clusters, falling back to cluster access:', error);
           await loadClusterAccess();
-          accessibleClusters.value = clusterAccess.value.map(access => ({
+          rawClusters = clusterAccess.value.map(access => ({
             id: access.clusterId,
             name: access.name || access.clusterId,
             state: 'active', // Assume active if accessible
             transitioning: false,
             provider: 'unknown',
             ready: true,
-            internalIP: '', // Will be filled during service discovery
-            publicIP: '' // Will be filled during service discovery
+            internalIP: '',
+            publicIP: ''
           }));
        }
+
+       // Check if local cluster exists and verify service
+       const localCluster = rawClusters.find((c: any) => c.id === 'local');
+       if (localCluster) {
+         console.log('Checking if service exists on local cluster...');
+         try {
+           // Quick check for service on local cluster
+           const { discoverPodObjects } = useServiceDiscovery();
+           const localServices = await discoverPodObjects(store, 'local');
+           
+           if (localServices.length === 0) {
+             console.log('No service found on local cluster, filtering it out');
+             rawClusters = rawClusters.filter((c: any) => c.id !== 'local');
+           } else {
+             console.log('Service found on local cluster, keeping it');
+           }
+         } catch (err) {
+           console.warn('Failed to check local cluster service, filtering it out:', err);
+           rawClusters = rawClusters.filter((c: any) => c.id !== 'local');
+         }
+       }
+
+       accessibleClusters.value = rawClusters;
 
         // Check if clusters were loaded successfully
         if (accessibleClusters.value.length === 0) {
@@ -1205,18 +1226,9 @@ const retryScan = async () => {
       // Clusters are loaded, wizard will handle the rest
     } catch (err: any) {
       console.error('Failed to initialize discovery wizard:', err);
-     // Fall back to mock clusters on error
-     accessibleClusters.value = [
-       {
-         id: 'local',
-         name: 'local',
-         state: 'active',
-         transitioning: false,
-         provider: 'k3s',
-         ready: true
-       }
-     ];
-     selectedClusters.value = [...accessibleClusters.value];
+      // Do not fall back to mock clusters on error, just show empty or error state
+      accessibleClusters.value = [];
+      clusterLoadingError.value = 'Failed to load clusters. Please check your connection and permissions.';
     } finally {
       loading.value = false;
       authCheckLoading.value = false;

@@ -182,27 +182,30 @@ export default defineComponent({
       }
     ])
 
-    const updateEndpoints = (loadBalancerIP: string) => {
+    const updateEndpoints = (baseUrl: string) => {
+      // Remove trailing slash if present
+      const cleanBaseUrl = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
+      
       activationSteps.value.forEach(step => {
         if (step.endpoint === 'Loading...') {
           switch (step.id) {
             case 'proxy-config':
-              step.endpoint = `http://${loadBalancerIP}:8911`
+              step.endpoint = cleanBaseUrl
               break
             case 'enable-gateway':
-              step.endpoint = `http://${loadBalancerIP}:8911/gateway`
+              step.endpoint = `${cleanBaseUrl}/gateway`
               break
             case 'enable-registry':
-              step.endpoint = `http://${loadBalancerIP}:8911/registry`
+              step.endpoint = `${cleanBaseUrl}/registry`
               break
             case 'enable-agents':
-              step.endpoint = `http://${loadBalancerIP}:8911/agents`
+              step.endpoint = `${cleanBaseUrl}/agents`
               break
             case 'enable-virtual-mcp':
-              step.endpoint = `http://${loadBalancerIP}:8911/virtual`
+              step.endpoint = `${cleanBaseUrl}/virtual`
               break
             case 'health-check':
-              step.endpoint = `http://${loadBalancerIP}:8911/health`
+              step.endpoint = `${cleanBaseUrl}/health`
               break
           }
         }
@@ -221,8 +224,9 @@ export default defineComponent({
     const runActivationSequence = async () => {
       if (!selectedCluster.value) return
 
-      // Use service discovery to find the correct IP
-      let loadBalancerIP = '10.42.0.45' // Default fallback
+      // Use service discovery to find the correct IP or URL
+      let serviceBaseUrl = 'http://10.42.0.45:8911' // Default fallback
+      let loadBalancerIP = '10.42.0.45' // Keep for display/fallback
 
       try {
         console.log('🔍 Discovering SUSE AI services...')
@@ -230,26 +234,32 @@ export default defineComponent({
 
         if (discoveredPods.length > 0) {
           const primaryPod = discoveredPods[0]
+          const primaryUrl = (primaryPod as any).url
           const primaryIP = primaryPod.primaryIP
 
-          if (primaryIP) {
+          if (primaryUrl) {
+            serviceBaseUrl = primaryUrl
+            console.log('✅ Using discovered Rancher Proxy URL:', serviceBaseUrl)
+            updateEndpoints(serviceBaseUrl)
+          } else if (primaryIP) {
             loadBalancerIP = primaryIP
+            serviceBaseUrl = `http://${loadBalancerIP}:8911`
             console.log('✅ Using discovered service IP:', loadBalancerIP)
-            updateEndpoints(loadBalancerIP)
+            updateEndpoints(serviceBaseUrl)
           } else {
-            console.log('⚠️ No primary IP found in discovered services, using default IP:', loadBalancerIP)
-            updateEndpoints(loadBalancerIP)
+            console.log('⚠️ No primary IP or URL found in discovered services, using default:', serviceBaseUrl)
+            updateEndpoints(serviceBaseUrl)
           }
         } else {
-          console.log('⚠️ No SUSE AI services discovered, using default IP:', loadBalancerIP)
-          updateEndpoints(loadBalancerIP)
+          console.log('⚠️ No SUSE AI services discovered, using default:', serviceBaseUrl)
+          updateEndpoints(serviceBaseUrl)
         }
       } catch (error) {
-        console.warn('⚠️ Service discovery failed, using default IP:', error)
-        updateEndpoints(loadBalancerIP)
+        console.warn('⚠️ Service discovery failed, using default:', error)
+        updateEndpoints(serviceBaseUrl)
       }
 
-      // Discovered services with LoadBalancer IP
+      // Discovered services with URL info
       const discoveredServices = [
         {
           clusterId: selectedCluster.value.id,
@@ -258,12 +268,13 @@ export default defineComponent({
           namespace: 'suseai',
           primaryIP: loadBalancerIP,
           loadBalancerIP: loadBalancerIP,
-          externalIPs: []
+          externalIPs: [],
+          url: serviceBaseUrl
         }
       ]
 
       const selectedServices = ['mcp-gateway', 'mcp-registry', 'smart-agents', 'virtual-mcp']
-      const serviceUrls = [`http://${loadBalancerIP}:8911`]
+      const serviceUrls = [serviceBaseUrl]
 
       // Step 1: Configure Proxy Settings
       await updateStepStatus('proxy-config', 'processing')
