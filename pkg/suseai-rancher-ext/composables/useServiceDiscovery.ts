@@ -588,10 +588,15 @@ export function useServiceDiscovery() {
               }
             }
 
-            // Fallback to pod IP if no annotation
+            // Fallback to host IP (Node IP) if available, then pod IP
             if (!primaryIP) {
-              primaryIP = pod.status?.podIP;
-              console.log(`📍 [ServiceDiscovery] Using pod IP as primary IP: ${primaryIP}`);
+              if (pod.status?.hostIP) {
+                primaryIP = pod.status.hostIP;
+                console.log(`📍 [ServiceDiscovery] Using host IP (Node IP) as primary IP: ${primaryIP}`);
+              } else {
+                primaryIP = pod.status?.podIP;
+                console.log(`📍 [ServiceDiscovery] Using pod IP as primary IP: ${primaryIP}`);
+              }
             }
 
             // Construct Rancher Proxy URL

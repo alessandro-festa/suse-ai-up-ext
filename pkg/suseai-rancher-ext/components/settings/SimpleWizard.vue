@@ -237,12 +237,16 @@ export default defineComponent({
           const primaryUrl = (primaryPod as any).url
           const primaryIP = primaryPod.primaryIP
 
+          // Always update loadBalancerIP if we found a primary IP
+          if (primaryIP) {
+            loadBalancerIP = primaryIP
+          }
+
           if (primaryUrl) {
             serviceBaseUrl = primaryUrl
             console.log('✅ Using discovered Rancher Proxy URL:', serviceBaseUrl)
             updateEndpoints(serviceBaseUrl)
           } else if (primaryIP) {
-            loadBalancerIP = primaryIP
             serviceBaseUrl = `http://${loadBalancerIP}:8911`
             console.log('✅ Using discovered service IP:', loadBalancerIP)
             updateEndpoints(serviceBaseUrl)
