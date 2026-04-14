@@ -1,0 +1,23 @@
+apiVersion: v1
+entries:
+  suse-ai-universal-proxy:
+  - annotations:
+      catalog.cattle.io/certified: rancher
+      catalog.cattle.io/namespace: cattle-ui-plugin-system
+      catalog.cattle.io/os: linux
+      catalog.cattle.io/permits-os: linux, windows
+      catalog.cattle.io/rancher-version: '>= 2.10.0'
+      catalog.cattle.io/scope: management
+      catalog.cattle.io/ui-component: plugins
+      catalog.cattle.io/ui-extensions-version: '>= 3.0.0 < 4.0.0'
+    apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-04-14T21:05:01.060452+02:00"
+    description: suse-ai-universal-proxy plugin
+    digest: fdaf0ca40ed084878d11ada636e6c0f9d30622abd7bd4cdeeedc3a162fd8c107
+    name: suse-ai-universal-proxy
+    type: application
+    urls:
+    - assets/suse-ai-universal-proxy/suse-ai-universal-proxy-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-04-14T21:05:01.060232+02:00"
